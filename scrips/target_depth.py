@@ -8,6 +8,7 @@ from std_msgs.msg import Float64
 from std_msgs.msg import Int16
 from geometry_msgs.msg import Vector3
 from tracking_uav_control.msg import CameraFeatures
+from tracking_uav_control.msg import LSEDepths
 from tracking_uav_control.msg import LSEDepth
 
 import argparse
@@ -18,7 +19,7 @@ from utils import *
 
 parser = argparse.ArgumentParser(prog="python target_depth.py")
 parser.add_argument("-n","--uav_num", dest="uav_num", default=3, help="uav_num")
-parser.add_argument("-r","--loop_rate", dest="rate", default=100, help="loop_rate")
+parser.add_argument("-r","--loop_rate", dest="rate", default=50, help="loop_rate")
 args = parser.parse_args()
 
 # number of cameras
@@ -50,8 +51,8 @@ class DNN():
         self.bbx = CameraFeatures()
         self.detect_sub = rospy.Subscriber(sub_topic, CameraFeatures, self.detect_cb, queue_size=1)
         self.vec = np.zeros([3,1])
-        self.feature = {'u':0, 'v':0, 'f':0, 'cu':0, 'cv':0}
-        self.__feature = {'u':0, 'v':0, 'f':0, 'cu':0, 'cv':0}
+        self.feature = {'u':0.0, 'v':0.0, 'f':0.0, 'cu':0, 'cv':0}
+        self.__feature = {'u':0.0, 'v':0.0, 'f':0.0, 'cu':0, 'cv':0}
         self.id = ID
 
     def detect_cb(self, msg):
@@ -59,17 +60,18 @@ class DNN():
         self.__feature['u'] = self.bbx.u.data
         self.__feature['v'] = self.bbx.v.data
         self.__feature['f'] = self.bbx.fx.data
-        self.__feature['cu'] = self.bbx.cu.data
-        self.__feature['cv'] = self.bbx.cv.data
-        if abs(self.__feature['u']) >= 0.5 and abs(self.__feature['v']) >= 0.5 and abs(self.__feature['f']) >= 0.5 and abs(self.__feature['cu']) >= 0.5 and abs(self.__feature['cv']) >= 0.5:
+        self.__feature['cu'] = 635.5 #self.bbx.cu.data
+        self.__feature['cv'] = 355.5 #self.bbx.cv.data
+        if abs(self.__feature['u']) >= 0.5 and abs(self.__feature['v']) >= 0.5 and abs(self.__feature['f']) >= 0.5:
             self.feature['u'] = self.__feature['u']
             self.feature['v'] = self.__feature['v']
             self.feature['f'] = self.__feature['f']
             self.feature['cu'] = self.__feature['cu']
             self.feature['cv'] = self.__feature['cv']
-        self.vec[0] = (self.feature['u'] - self.bbx.cu.data)
-        self.vec[1] = (self.feature['v'] - self.bbx.cv.data)
-        self.vec[2] =  self.feature['f']
+        
+            self.vec[0] = (self.feature['u'] - self.bbx.cu.data)
+            self.vec[1] = (self.feature['v'] - self.bbx.cv.data)
+            self.vec[2] =  self.feature['f']
 
     def getBBX(self):
         return self.bbox
@@ -78,12 +80,12 @@ class DNN():
         return self.vec
     
     def getData(self):
-        return abs(self.__feature['u']) >= 0.5 and abs(self.__feature['v']) >= 0.5 and abs(self.__feature['f']) >= 0.5 and abs(self.__feature['cu']) >= 0.5 and abs(self.__feature['cv']) >= 0.5
+        return abs(self.vec[0]) >= 0.5 and abs(self.vec[1]) >= 0.5 and abs(self.vec[2]) >= 0.5
     
 class GIMBAL():
     def __init__(self, sub_topic, ID):
         self.__states = JointState()
-        self.pose_sub = rospy.Subscriber(sub_topic, Odometry, self.pose_cb, queue_size=1)
+        self.pose_sub = rospy.Subscriber(sub_topic, JointState, self.pose_cb, queue_size=1)
         self.state = {'roll': 0,
                       'tilt': 0,
                       'pan':  0,
@@ -144,9 +146,9 @@ def GimbalGeometryTransfer():
 class DepthEstimate():
     def __init__(self):
         rospy.init_node('target_depth', anonymous=True)
-        self.pub_depth = rospy.Publisher('/estimate/lse/depth', LSEDepth, queue_size=1)
+        self.pub_depth = rospy.Publisher('/estimate/lse/results', LSEDepths, queue_size=1)
         self.rate = rospy.Rate(int(args.rate))
-        self.results = LSEDepth()
+        self.results = LSEDepths()
         
         DataCallback()
         LoadingGeometry()
@@ -162,13 +164,18 @@ class DepthEstimate():
                 [pose_uav[i].getPos().x],
                 [pose_uav[i].getPos().y],
                 [pose_uav[i].getPos().z] ]) + geo_gimbal[i])
+            
+        
+        print('\n------')
+
+        for i in range(N):
+            print(info_cam[i].getVEC())
+            print(info_cam[i].getData())
+
+        
+
 
         if all(info_cam[i].getData() for i in range(N)):
-
-            for i in range(N):
-                print(info_cam[i].getVEC())
-
-
             # construct matrices
             tau = []
             dummy = np.zeros([3,1])
@@ -189,24 +196,27 @@ class DepthEstimate():
             pinv_A = np.dot( inv_ATA,  np.transpose(A))
             X = np.dot( pinv_A, B)
 
-            pt=[]
+            self.results.lse_results.clear()
             for i in range(N):
+                data = LSEDepth()
                 pos = Vector3()
+
                 _pos = pose_cam[i]+X[i,0]*tau[i]
                 pos.x = _pos[0,0]
                 pos.y = _pos[1,0]
                 pos.z = _pos[2,0]
-                pt.append(pos)
+                data.position = pos
 
-            di = []
-            for i in range(N):
                 _di = X[i,0]*tau[i]
-                di.append( np.sqrt( (_di[0])**2+(_di[1])**2+(_di[2])**2 ) )
+                data.depth.data = np.sqrt( (_di[0])**2+(_di[1])**2+(_di[2])**2 )
+                data.mav_id.data = pose_uav[i].getID()
+                
+                self.results.lse_results.append(data)
 
-            self.results.mav_id = [Int16(pose_uav[0].getID()), Int16(pose_uav[1].getID()), Int16(pose_uav[2].getID())]
-            self.results.depth = [Float64(di[0]), Float64(di[1]), Float64(di[2])]
-            self.results.position = pt
             self.pub_depth.publish(self.results)
+
+        else:
+            print('Not Ready')
 
 
 if __name__ == '__main__':

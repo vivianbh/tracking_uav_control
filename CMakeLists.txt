@@ -64,6 +64,7 @@ add_message_files(
   EstimateOutput.msg
   Trajectory3D.msg
   LSEDepth.msg
+  LSEDepths.msg
 )
 
 ## Generate services in the 'srv' folder

@@ -178,6 +178,13 @@ target_link_libraries(fw_takeoff
  ${catkin_LIBRARIES}
 )
 
+add_executable(flightControl_waypoints src/experiment/flightControl_waypoints.cpp)
+add_dependencies(flightControl_waypoints ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(flightControl_waypoints
+ ${mavros_LIBRARIES}
+ ${catkin_LIBRARIES}
+)
+
 add_executable(flightControl src/flightControl.cpp)
 add_dependencies(flightControl ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(flightControl

@@ -174,7 +174,7 @@ def GimbalGeometryTransfer():
 class DepthEstimate():
     def __init__(self):
         rospy.init_node('target_depth', anonymous=True)
-        self.pub_depth = rospy.Publisher('/estimate/lse/results', LSEDepths, queue_size=1)
+        self.pub_depth = rospy.Publisher('/estimate/lse/resultss', LSEDepths, queue_size=1)
         self.rate = rospy.Rate(int(args.rate))
         self.results = LSEDepths()
 
@@ -251,8 +251,11 @@ class DepthEstimate():
                 pos.z = _pos[2,0]
                 data.position = pos
 
-                _di = X[i,0]*self.tau[i]
-                data.depth.data = np.sqrt( (_di[0])**2+(_di[1])**2+(_di[2])**2 )
+                _di = _pos - pose_cam[i] #X[i,0]*self.tau[i]
+                invR = np.linalg.inv( info_dyn[i].getRc2g() )
+                _di = np.dot( invR, _di )
+                #data.depth.data = np.sqrt( (_di[0])**2+(_di[1])**2+(_di[2])**2 )
+                data.depth.data = _di[2]
                 data.mav_id.data = pose_uav[i].getID()
                 
                 self.results.lse_results.append(data)

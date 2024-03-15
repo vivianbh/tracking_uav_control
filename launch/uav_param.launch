@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<launch>
+
+	<group ns="uav0">
+		<rosparam command="load" file="$(find tracking_uav_control)/config/params_ibvs.yaml" />
+		<node pkg="tracking_uav_control" name="fw_takeoff" type="fw_takeoff" output="screen" />
+	</group>
+
+	<group ns="uav1">
+		<rosparam command="load" file="$(find tracking_uav_control)/config/params_ibvs.yaml" />
+	</group>
+
+	<group ns="uav2">
+		<rosparam command="load" file="$(find tracking_uav_control)/config/params_ibvs.yaml" />
+	</group>
+</launch>
+

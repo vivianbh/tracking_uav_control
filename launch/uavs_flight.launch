@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+
+	<group ns="uav0">
+		<node pkg="tracking_uav_control" name="fw_takeoff" type="fw_takeoff" output="screen" />
+	</group>
+
+	<group ns="uav1">
+		<node pkg="tracking_uav_control" name="fw_takeoff" type="fw_takeoff" output="screen" />
+	</group>
+
+	<group ns="uav2">
+		<node pkg="tracking_uav_control" name="fw_takeoff" type="fw_takeoff" output="screen" />
+	</group>
+</launch>
+

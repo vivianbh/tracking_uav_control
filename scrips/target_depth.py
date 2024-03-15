@@ -10,6 +10,7 @@ from geometry_msgs.msg import Vector3
 from tracking_uav_control.msg import CameraFeatures
 from tracking_uav_control.msg import LSEDepths
 from tracking_uav_control.msg import LSEDepth
+from tracking_uav_control.msg import Dynamics
 
 import argparse
 import numpy as np
@@ -19,7 +20,7 @@ from utils import *
 
 parser = argparse.ArgumentParser(prog="python target_depth.py")
 parser.add_argument("-n","--uav_num", dest="uav_num", default=3, help="uav_num")
-parser.add_argument("-r","--loop_rate", dest="rate", default=50, help="loop_rate")
+parser.add_argument("-r","--loop_rate", dest="rate", default=20, help="loop_rate")
 args = parser.parse_args()
 
 # number of cameras
@@ -41,6 +42,31 @@ class MAV():
     
     def getQua(self):
         return self.orientation
+    
+    def getID(self):
+        return self.id
+    
+class DYNAMICS():
+    def __init__(self, sub_topic, ID):
+        self.pose_sub = rospy.Subscriber(sub_topic, Dynamics, self.dyn_cb, queue_size=1)
+        self.id = ID
+        self.geo_cam = np.zeros([3,1])
+        self.camPos_gnd = np.zeros([3,1])
+        self.rot_c2g = np.zeros([3,3])
+
+    def dyn_cb(self, msg):
+        self.geo_cam = np.array([[msg.camuav_pose.x], [msg.camuav_pose.y], [msg.camuav_pose.z]])
+        self.camPos_gnd = np.array([[msg.cam_pose_inertial.x], [msg.cam_pose_inertial.y], [msg.cam_pose_inertial.z]])
+        self.rot_c2g= np.matrix( [[msg.rot_c2g.data[0], msg.rot_c2g.data[1], msg.rot_c2g.data[2]], [msg.rot_c2g.data[3], msg.rot_c2g.data[4], msg.rot_c2g.data[5]], [msg.rot_c2g.data[6], msg.rot_c2g.data[7], msg.rot_c2g.data[8]]])
+
+    def getGeoCam(self):
+        return self.geo_cam
+    
+    def getCamPos(self):
+        return self.camPos_gnd
+    
+    def getRc2g(self):
+        return self.rot_c2g
     
     def getID(self):
         return self.id
@@ -107,15 +133,17 @@ class GIMBAL():
         return self.state
 
 def DataCallback():
-    global pose_uav, info_cam, pose_gimbal
+    global pose_uav, info_cam, pose_gimbal, info_dyn
     pose_uav = []
     info_cam = []
     pose_gimbal = []
+    info_dyn = []
 
     for i in range(N):
         pose_uav.append( MAV("/uav"+str(i)+"/base_pose_ground_truth", i) )
         info_cam.append( DNN("/uav"+str(i)+"/estimation/ukf/camera_features", i) )
         pose_gimbal.append( GIMBAL("/uav"+str(i)+"/gimbal/joint_states", i) )
+        info_dyn.append( DYNAMICS("/uav"+str(i)+"/estimation/ukf/dynamics", i) )
 
 def LoadingGeometry():
     global geo_uav2pan, geo_pan2cam
@@ -149,41 +177,50 @@ class DepthEstimate():
         self.pub_depth = rospy.Publisher('/estimate/lse/results', LSEDepths, queue_size=1)
         self.rate = rospy.Rate(int(args.rate))
         self.results = LSEDepths()
+
+        self.tau = []
         
         DataCallback()
         LoadingGeometry()
 
     def estimate(self):
         # transfer (UAV->camera) geometry into gnd frame
-        GimbalGeometryTransfer()
+        #GimbalGeometryTransfer()
 
         # camera position in gnd frame
         pose_cam = []
+        '''
         for i in range(N):
             pose_cam.append( np.array([
                 [pose_uav[i].getPos().x],
                 [pose_uav[i].getPos().y],
                 [pose_uav[i].getPos().z] ]) + geo_gimbal[i])
+        ''' 
+        for i in range(N):
+            pose_cam.append( info_dyn[i].getCamPos() )
             
         
         print('\n------')
-
+        
         for i in range(N):
             print(info_cam[i].getVEC())
-            print(info_cam[i].getData())
-
+            #print(info_dyn[i].getCamPos())
         
-
-
+        for i in range(N):
+            #print(info_cam[i].getVEC())
+            print(info_cam[i].getData())
+        
+        
         if all(info_cam[i].getData() for i in range(N)):
             # construct matrices
-            tau = []
+            #tau = []
             dummy = np.zeros([3,1])
             for i in range(N):
-                vec = np.dot( invR_g2c(pose_gimbal[i].getPos()['tilt'], pose_gimbal[i].getPos()['pan'], pose_uav[i].getQua()), info_cam[i].getVEC() )
-                tau.append(vec)
+                #vec = np.dot( invR_g2c(pose_gimbal[i].getPos()['tilt'], pose_gimbal[i].getPos()['pan'], pose_uav[i].getQua()), info_cam[i].getVEC() )
+                vec = np.dot( info_dyn[i].getRc2g(), info_cam[i].getVEC() )
+                self.tau.append(vec)
                     
-            A = np.vstack( ( np.hstack((tau[0],-tau[1],dummy)), np.hstack((tau[0],dummy,-tau[2])), np.hstack((dummy,tau[1],-tau[2])) ) )
+            A = np.vstack( ( np.hstack((self.tau[0],-self.tau[1],dummy)), np.hstack((self.tau[0],dummy,-self.tau[2])), np.hstack((dummy,self.tau[1],-self.tau[2])) ) )
             b = []
             for i in range(N-1):
                 for j in range(i+1, N):
@@ -196,24 +233,33 @@ class DepthEstimate():
             pinv_A = np.dot( inv_ATA,  np.transpose(A))
             X = np.dot( pinv_A, B)
 
+            print('X ', X)
+            
+            for i in range(N):
+                #print('cam pos ', pose_cam[i])
+                print('direction ', self.tau[i])
+                #print('vec ', info_cam[i].getVEC())
+            
             self.results.lse_results.clear()
             for i in range(N):
                 data = LSEDepth()
                 pos = Vector3()
 
-                _pos = pose_cam[i]+X[i,0]*tau[i]
+                _pos = pose_cam[i]+X[i,0]*self.tau[i]
                 pos.x = _pos[0,0]
                 pos.y = _pos[1,0]
                 pos.z = _pos[2,0]
                 data.position = pos
 
-                _di = X[i,0]*tau[i]
+                _di = X[i,0]*self.tau[i]
                 data.depth.data = np.sqrt( (_di[0])**2+(_di[1])**2+(_di[2])**2 )
                 data.mav_id.data = pose_uav[i].getID()
                 
                 self.results.lse_results.append(data)
+                print('depth ', data.depth.data)
 
             self.pub_depth.publish(self.results)
+            self.tau.clear()
 
         else:
             print('Not Ready')
